@@ -205,6 +205,9 @@ local function newTick()
 
    local order_error = desired_order - current_orders
 
+   --clamp order_error
+   order_error = clamp(-50, 50, order_error)
+
    game.print("order_error: "..order_error)
 
    ctrl.radius = ctrl.radius + (order_error * 0.005)
