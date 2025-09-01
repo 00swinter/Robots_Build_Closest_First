@@ -1,0 +1,11 @@
+{
+    "name": "Robots_Build_Closest_First",
+    "version": "0.0.1",
+    "title": "Robots Build Closest First",
+    "author": "00swinter",
+    "contact": "Discord: 00swinter",
+    "homepage": "https://github.com/00swinter/Robots_Build_Closest_First",
+    "factorio_version": "2.0",
+    "dependencies": ["base >= 2.0" ],
+    "description": "Personal construction robots will now prioritize building and deconstructing entities that are closest to the player"
+}
