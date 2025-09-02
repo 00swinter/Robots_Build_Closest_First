@@ -178,7 +178,7 @@ local ctrl = {
    lerped_radius = config.min_radius,
    radius = config.min_radius,
    velocity = 0,
-   all_used_streak = 0
+   no_orders_streak = 0
 }
 
 
@@ -201,23 +201,42 @@ local function newTick()
    local current_orders = get_player_all_robot_order_count(p)
    local max_robots = get_player_real_robot_limit(p)
 
-   local desired_order = max_robots * 4
+
+
+   if current_orders == 0 then
+      ctrl.no_orders_streak = ctrl.no_orders_streak + 1
+      --game.print("no orders streak: "..ctrl.no_orders_streak)
+   else
+      if ctrl.no_orders_streak > 90 then
+         ctrl.radius = config.min_radius
+         game.print("reset radius to min")
+      end
+      ctrl.no_orders_streak = 0
+   end
+
+   --information
+   -- allow error for desired order level -> bigger radius bigger error threshold allowed
+
+   local desired_order = max_robots * 1
 
    local order_error = desired_order - current_orders
 
    --clamp order_error
-   order_error = clamp(-50, 50, order_error)
+   order_error = clamp(-40, 40, order_error)
 
-   game.print("order_error: "..order_error)
+   --game.print("order_error: "..order_error)
 
-   ctrl.radius = ctrl.radius + (order_error * 0.005)
+   if math.abs(order_error) > 20 then
+      ctrl.radius = ctrl.radius + (order_error * 0.005)
+   end
+
    
    
    --clamp
    ctrl.radius = clamp(3,maxR, ctrl.radius)
 
    --lerp
-   ctrl.lerped_radius = lerp(ctrl.lerped_radius, ctrl.radius, 0.1)
+   ctrl.lerped_radius = lerp(ctrl.lerped_radius, ctrl.radius, 0.08)
 
    set_grid_radius(grid, ctrl.lerped_radius)
    --draw_area
