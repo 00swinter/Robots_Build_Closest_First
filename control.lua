@@ -61,13 +61,13 @@ end
 local function get_player_all_robot_order_count(player)
    local logistic = player.character.logistic_network
 
-   local order_count = 0
-
-   for _, entity in next, logistic.robots do
-      order_count = order_count + #entity.robot_order_queue
+   local count = 0
+   for _, robot in pairs(logistic.robots) do
+      if robot.valid and robot.robot_order_queue then
+         count = count + #robot.robot_order_queue
+      end
    end
-
-   return order_count
+   return count
 end
 
 local function get_player_robots_ready_to_start(player)
@@ -167,11 +167,11 @@ local function clamp(min, max, value)
 end
 --working values
 local config = {
-   update_interval = 5,
+   update_interval = 8,
    order_buffer = 50,
    min_radius = 3,
-   change_rate = 0.001,
-   lerp_rate = 0.08,
+   change_rate = 0.0025,
+   lerp_rate = 1,
    snap_back_threshold = 250
 }
 
@@ -227,7 +227,7 @@ local function newTick()
       --game.print("no orders streak: "..data.no_orders_streak)
    else
       if data.no_orders_streak > config.snap_back_threshold then
-         data.radius = config.min_radius
+         --data.radius = config.min_radius
          game.print("reset radius to min")
       end
       data.no_orders_streak = 0
@@ -236,24 +236,26 @@ local function newTick()
    --information
    -- allow error for desired order level -> bigger radius bigger error threshold allowed
 
-   local desired_orders = max_robots * (1 + (((data.radius*data.radius)/(max_Radius*max_Radius)) * 4))
+   local radius_progress = data.lerped_radius / max_Radius
+
+   local desired_orders = max_robots * 2-- + (radius_progress * 8)
+
 
    desired_orders = math.floor(desired_orders + 0.5)
 
-
    local order_error = desired_orders - current_orders
 
-   local allowed_error = math.floor(data.radius / max_Radius * 100)
+   local allowed_error = desired_orders * 0.4
 
    --clamp order_error
-   --order_error = clamp(-40, 40, order_error)
+   --order_error = clamp(-allowed_error-1, 1+allowed_error, order_error)
 
    --game.print("order_error: "..order_error)
 
    if math.abs(order_error) > allowed_error then
+      local applied_error = clamp(-200, 200, order_error)
+      data.radius = data.radius + applied_error * (config.change_rate / (data.radius/4)) * config.update_interval
    end
-   data.radius = data.radius + order_error * config.change_rate * config.update_interval
-
 
 
    --clamp
@@ -317,20 +319,22 @@ local function newTick()
       time_to_live = config.update_interval,
    }
 
+
+   local order_error_color = order_error > 0 and { 0.7, 1, 0.7 } or { 1, 0.7, 0.7 }
    rendering.draw_text {
-      text = { "", "allowed_error: " .. allowed_error },
+      text = { "", "order_error: " .. order_error },
       surface = player.surface,
       target = {
          player.position.x - 2,
          player.position.y - 10
       },
       scale = 3,
-      color = { 1, 1, 1 },
+      color = order_error_color,
       time_to_live = config.update_interval,
    }
-
+   
    rendering.draw_text {
-      text = { "", "ticks_till_reset: " .. math.abs(config.snap_back_threshold - data.no_orders_streak) },
+      text = { "", "allowed_error: " .. allowed_error },
       surface = player.surface,
       target = {
          player.position.x - 2,
