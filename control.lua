@@ -167,16 +167,14 @@ local function clamp(min, max, value)
 end
 --working values
 local config = {
-   update_interval = 8,
+   update_interval = 10,
    order_buffer = 50,
    min_radius = 3,
    change_rate = 0.0025,
-   lerp_rate = 1,
-   snap_back_threshold = 250
+   snap_back_threshold = 100
 }
 
-local data = {
-   lerped_radius = config.min_radius,
+local dataOLD = {
    radius = config.min_radius,
    velocity = 0,
    no_orders_streak = 0
@@ -198,6 +196,7 @@ local function newTick()
    if not (player and player.valid and player.character and player.character.valid) then return end
 
 
+
    --has grid
    local grid = player.character.grid
    if not (grid and grid.valid) then return end
@@ -217,17 +216,38 @@ local function newTick()
    end
 
 
+   --is shortcut enabled
+
+   if not player.is_shortcut_toggled("shortcut-toggle-robots-build-closest-first") then
+      set_grid_radius(grid, max_Radius)
+      return
+   end
+
+   --SETTINGS
+   -- limit radius 0 = no limit
+   -- use limit when mod is toggled off (else is using max radius)
+   -- updaterate? not realy needed
+
+
+   --load / init storage
+   local data = storage.player_data[1] or
+       {
+          radius = config.min_radius,
+          velocity = 0,
+          no_orders_streak = 0
+       }
 
    local current_orders = get_player_all_robot_order_count(player)
    local max_robots = get_player_real_robot_limit(player)
+   local available_robots = get_player_available_robots(player)
 
    --update streak
-   if current_orders == 0 then
+   if current_orders == 0 and available_robots >= max_robots / 4 then
       data.no_orders_streak = data.no_orders_streak + config.update_interval
       --game.print("no orders streak: "..data.no_orders_streak)
    else
       if data.no_orders_streak > config.snap_back_threshold then
-         --data.radius = config.min_radius
+         data.radius = config.min_radius
          game.print("reset radius to min")
       end
       data.no_orders_streak = 0
@@ -236,16 +256,16 @@ local function newTick()
    --information
    -- allow error for desired order level -> bigger radius bigger error threshold allowed
 
-   local radius_progress = data.lerped_radius / max_Radius
+   local radius_progress = data.radius / max_Radius
 
-   local desired_orders = max_robots * 2-- + (radius_progress * 8)
+   local desired_orders = max_robots * 1.3 -- + (radius_progress * 8)
 
 
    desired_orders = math.floor(desired_orders + 0.5)
 
    local order_error = desired_orders - current_orders
 
-   local allowed_error = desired_orders * 0.4
+   local allowed_error = desired_orders * 0.2
 
    --clamp order_error
    --order_error = clamp(-allowed_error-1, 1+allowed_error, order_error)
@@ -253,8 +273,7 @@ local function newTick()
    --game.print("order_error: "..order_error)
 
    if math.abs(order_error) > allowed_error then
-      local applied_error = clamp(-200, 200, order_error)
-      data.radius = data.radius + applied_error * (config.change_rate / (data.radius/4)) * config.update_interval
+      data.radius = data.radius + order_error * (config.change_rate / (data.radius / 7)) * config.update_interval
    end
 
 
@@ -262,10 +281,13 @@ local function newTick()
    data.radius = clamp(3, max_Radius, data.radius)
 
    --lerp
-   data.lerped_radius = lerp(data.lerped_radius, data.radius, config.lerp_rate * config.update_interval)
+   --data.lerped_radius = lerp(data.lerped_radius, data.radius, config.lerp_rate * config.update_interval)
 
-   set_grid_radius(grid, data.lerped_radius)
+   set_grid_radius(grid, data.radius)
 
+   --save data
+
+   storage.player_data[1] = data
 
    --debug drawing
 
@@ -273,10 +295,10 @@ local function newTick()
       { player.position.x - data.radius, player.position.y - data.radius },
       { player.position.x + data.radius, player.position.y + data.radius }
    }
-   local area_lerped = {
-      { player.position.x - data.lerped_radius, player.position.y - data.lerped_radius },
-      { player.position.x + data.lerped_radius, player.position.y + data.lerped_radius }
-   }
+   --local area_lerped = {
+   --   { player.position.x - data.lerped_radius, player.position.y - data.lerped_radius },
+   --   { player.position.x + data.lerped_radius, player.position.y + data.lerped_radius }
+   --}
 
    rendering.draw_rectangle {
       surface = player.surface,
@@ -286,14 +308,14 @@ local function newTick()
       time_to_live = config.update_interval,
       width = 5
    }
-   rendering.draw_rectangle {
-      surface = player.surface,
-      left_top = area_lerped[1],
-      right_bottom = area_lerped[2],
-      color = { 1, 1, 1 },
-      time_to_live = config.update_interval,
-      width = 5
-   }
+   --rendering.draw_rectangle {
+   --   surface = player.surface,
+   --   left_top = area_lerped[1],
+   --   right_bottom = area_lerped[2],
+   --   color = { 1, 1, 1 },
+   --   time_to_live = config.update_interval,
+   --   width = 5
+   --}
 
    rendering.draw_text {
       text = { "", "current_orders: " .. current_orders },
@@ -332,7 +354,7 @@ local function newTick()
       color = order_error_color,
       time_to_live = config.update_interval,
    }
-   
+
    rendering.draw_text {
       text = { "", "allowed_error: " .. allowed_error },
       surface = player.surface,
@@ -368,7 +390,11 @@ local function shortcutToggle(e)
 end
 
 
-
+local function setup()
+   if not storage.player_data then
+      storage.player_data = {}
+   end
+end
 
 
 
@@ -379,3 +405,7 @@ script.on_event({ defines.events.on_tick }, newTick)
 script.on_event(defines.events.on_lua_shortcut, shortcutToggle)
 
 script.on_event("input-toggle-robots-build-closest-first", shortcutToggle)
+
+script.on_init(setup)
+
+--script.on_configuration_changed

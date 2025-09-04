@@ -7,5 +7,5 @@
     "homepage": "https://github.com/00swinter/Robots_Build_Closest_First",
     "factorio_version": "2.0",
     "dependencies": ["base >= 2.0" ],
-    "description": "Personal construction robots will now prioritize building and deconstructing entities that are closest to the player"
+    "description": "Personal construction robots will now prioritize building and deconstructing entities that are closest to the player  -  this makes a player twice as fast at building and deconstructing with robots with the exact same equipment setup!"
 }
