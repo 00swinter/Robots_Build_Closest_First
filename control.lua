@@ -1,3 +1,8 @@
+local def = require("defines")
+
+
+
+
 local function get_eq_max_radius(eq)
    return eq.prototype.take_result.place_as_equipment_result.logistic_parameters.construction_radius
 end
@@ -25,9 +30,6 @@ local function get_variant_name(eq, desired_radius)
    return eq.prototype.take_result.place_as_equipment_result.name .. "-reduced-" .. variant_radius
 end
 
-
-
-
 local function get_player_real_robot_limit(player)
    local logistic = player.character.logistic_network
    local cell = logistic.cells[1]
@@ -38,8 +40,16 @@ local function get_player_real_robot_limit(player)
    return math.min(robots_all, robots_limit)
 end
 
+local function get_player_max_minus_charging(player)
+   local logistic = player.character.logistic_network
+   local cell = logistic.cells[1]
 
+   local max = get_player_real_robot_limit(player)
 
+   local charging = cell.charging_robot_count + cell.to_charge_robot_count
+
+   return max - charging
+end
 
 local function get_player_available_robots(player)
    local logistic = player.character.logistic_network
@@ -51,7 +61,6 @@ local function get_player_available_robots(player)
    local real_limit = math.min(robots_all, robots_limit)
 
    local ava = logistic.available_construction_robots
-   --game.print("--------------- "..ava)
 
    local charging = cell.charging_robot_count + cell.to_charge_robot_count
 
@@ -70,28 +79,17 @@ local function get_player_all_robot_order_count(player)
    return count
 end
 
-local function get_player_robots_ready_to_start(player)
-   local logistic = player.character.logistic_network
-   local cell = logistic.cells[1]
-
-   local robots_limit = logistic.robot_limit
-   local robots_available = logistic.available_construction_robots
-   local robots_all = logistic.all_construction_robots
-
-
-
-
-   --local charging = cell.charging_robot_count + cell.to_charge_robot_count
-
-   --local avail_temp = robots_limit - charging
-
-   --return avail_temp
-
-   local robots_real_available = robots_limit - (robots_all - robots_available)
-   return math.min(robots_available, robots_real_available)
+local function get_grid_any_inactive(grid)
+   for _, eq in pairs(grid.equipment) do
+      if eq.type == "roboport-equipment" then
+         local spawn_minimum = eq.max_energy * 0.2
+         if eq.energy < spawn_minimum then
+            return true
+         end
+      end
+   end
+   return false
 end
-
-
 
 local function set_eq_radius(grid, eq, desired_radius)
    if desired_radius < 0 then
@@ -146,94 +144,73 @@ local function set_grid_radius(grid, desired_radius)
    end
 end
 
-
---adding a new valueto the buffer while also returning the average of the ringbuffer
-local function moving_average_ringbuffer_push(rb, value)
-   local next_idx = (rb.index % rb.max) + 1
-   local old = rb.buffer[next_idx] or 0
-   rb.buffer[next_idx] = value
-   rb.sum = rb.sum - old + value
-   rb.index = next_idx
-   return (rb.sum / rb.max) or value
-end
-
-local function lerp(a, b, t)
-   t = math.max(0, math.min(t, 1))
-   return a + t * (b - a)
-end
-
 local function clamp(min, max, value)
    return math.max(min, math.min(value, max))
 end
+
 --working values
 local config = {
    update_interval = 10,
    order_buffer = 50,
    min_radius = 3,
    change_rate = 0.0025,
-   snap_back_threshold = 100
+   snap_back_threshold = 300
 }
-
-local dataOLD = {
-   radius = config.min_radius,
-   velocity = 0,
-   no_orders_streak = 0
-}
-
 
 local function newTick()
    if game.tick % config.update_interval ~= 0 then return end
 
-
    local connected_players = game.connected_players
    if #connected_players == 0 then return end
 
+   for _, pla in pairs(connected_players) do
+      game.print(pla.name)
+   end
 
-
+   --calculate tick
+   local update_rate = 10 --#connected_players
+   local tick = #connected_players + 1
 
    --has player
    local player = game.players[1]
    if not (player and player.valid and player.character and player.character.valid) then return end
-
-
 
    --has grid
    local grid = player.character.grid
    if not (grid and grid.valid) then return end
 
    --has roboport
-
    local logistic = player.character.logistic_network
    if not (logistic and logistic.valid) then return end
 
-
-
-
+   --get max radius
    local max_Radius = get_grid_max_radius(grid) or 0
    if max_Radius <= 0 then
       set_grid_radius(grid, 0)
       return
    end
 
+   local radius_limit_setting = def.limited_radius_table
+   [settings.get_player_settings(player)[def.limited_radius_setting].value]
+   if radius_limit_setting == 0 then
+      radius_limit_setting = max_Radius
+   end
 
-   --is shortcut enabled
-
+   --is shortcut enabled?
    if not player.is_shortcut_toggled("shortcut-toggle-robots-build-closest-first") then
-      set_grid_radius(grid, max_Radius)
+      local use_limit = settings.get_player_settings(player)[def.use_limit_when_off_setting].value
+      if use_limit then
+         set_grid_radius(grid, radius_limit_setting)
+      else
+         set_grid_radius(grid, max_Radius)
+      end
       return
    end
 
-   --SETTINGS
-   -- limit radius 0 = no limit
-   -- use limit when mod is toggled off (else is using max radius)
-   -- updaterate? not realy needed
-
-
-   --load / init storage
+   --load / init data from storage
    local data = storage.player_data[1] or
        {
           radius = config.min_radius,
-          velocity = 0,
           no_orders_streak = 0
        }
 
@@ -241,10 +218,14 @@ local function newTick()
    local max_robots = get_player_real_robot_limit(player)
    local available_robots = get_player_available_robots(player)
 
-   --update streak
-   if current_orders == 0 and available_robots >= max_robots / 4 then
-      data.no_orders_streak = data.no_orders_streak + config.update_interval
-      --game.print("no orders streak: "..data.no_orders_streak)
+   local max_minus_charging = get_player_max_minus_charging(player)
+
+   --update streak for fast snap back
+   if current_orders == 0 and available_robots >= max_robots / 4 and math.abs(data.radius - radius_limit_setting) < 4 then
+      if data.no_orders_streak <= config.snap_back_threshold then
+         data.no_orders_streak = data.no_orders_streak + update_rate
+      end
+      game.print("streak: "..data.no_orders_streak)
    else
       if data.no_orders_streak > config.snap_back_threshold then
          data.radius = config.min_radius
@@ -253,119 +234,120 @@ local function newTick()
       data.no_orders_streak = 0
    end
 
-   --information
-   -- allow error for desired order level -> bigger radius bigger error threshold allowed
-
-   local radius_progress = data.radius / max_Radius
-
-   local desired_orders = max_robots * 1.3 -- + (radius_progress * 8)
-
-
+   local charging_robots_diff = max_robots - max_minus_charging
+   local desired_orders = max_robots - (charging_robots_diff * 0.5) * 1.4
    desired_orders = math.floor(desired_orders + 0.5)
 
    local order_error = desired_orders - current_orders
-
    local allowed_error = desired_orders * 0.2
 
-   --clamp order_error
-   --order_error = clamp(-allowed_error-1, 1+allowed_error, order_error)
-
-   --game.print("order_error: "..order_error)
-
    if math.abs(order_error) > allowed_error then
-      data.radius = data.radius + order_error * (config.change_rate / (data.radius / 7)) * config.update_interval
+      data.radius = data.radius + order_error * (config.change_rate / (data.radius / 6)) * update_rate
    end
 
+   if get_grid_any_inactive(grid) then
+      data.radius = data.radius - (config.change_rate * 35) * update_rate
+   end
 
    --clamp
-   data.radius = clamp(3, max_Radius, data.radius)
+   data.radius = clamp(3, radius_limit_setting, data.radius)
 
-   --lerp
-   --data.lerped_radius = lerp(data.lerped_radius, data.radius, config.lerp_rate * config.update_interval)
-
+   --set new construction area
    set_grid_radius(grid, data.radius)
 
-   --save data
 
+   --save data to storage
    storage.player_data[1] = data
 
    --debug drawing
+   if false then
+      local area = {
+         { player.position.x - data.radius, player.position.y - data.radius },
+         { player.position.x + data.radius, player.position.y + data.radius }
+      }
 
-   local area = {
-      { player.position.x - data.radius, player.position.y - data.radius },
-      { player.position.x + data.radius, player.position.y + data.radius }
-   }
-   --local area_lerped = {
-   --   { player.position.x - data.lerped_radius, player.position.y - data.lerped_radius },
-   --   { player.position.x + data.lerped_radius, player.position.y + data.lerped_radius }
-   --}
+      rendering.draw_rectangle {
+         surface = player.surface,
+         left_top = area[1],
+         right_bottom = area[2],
+         color = { 0, 0.1, 0.8 },
+         time_to_live = config.update_interval,
+         width = 5
+      }
 
-   rendering.draw_rectangle {
-      surface = player.surface,
-      left_top = area[1],
-      right_bottom = area[2],
-      color = { 0, 0.1, 0.8 },
-      time_to_live = config.update_interval,
-      width = 5
-   }
-   --rendering.draw_rectangle {
-   --   surface = player.surface,
-   --   left_top = area_lerped[1],
-   --   right_bottom = area_lerped[2],
-   --   color = { 1, 1, 1 },
-   --   time_to_live = config.update_interval,
-   --   width = 5
-   --}
+      rendering.draw_text {
+         text = { "", "current_orders: " .. current_orders },
+         surface = player.surface,
+         target = {
+            player.position.x - 2,
+            player.position.y - 8
+         },
+         scale = 3,
+         color = { 1, 1, 1 },
+         time_to_live = config.update_interval,
+      }
 
-   rendering.draw_text {
-      text = { "", "current_orders: " .. current_orders },
-      surface = player.surface,
-      target = {
-         player.position.x - 2,
-         player.position.y - 8
-      },
-      scale = 3,
-      color = { 1, 1, 1 },
-      time_to_live = config.update_interval,
-   }
+      rendering.draw_text {
+         text = { "", "desired_orders: " .. desired_orders },
+         surface = player.surface,
+         target = {
+            player.position.x - 2,
+            player.position.y - 9
+         },
+         scale = 3,
+         color = { 1, 1, 1 },
+         time_to_live = config.update_interval,
+      }
 
-   rendering.draw_text {
-      text = { "", "desired_orders: " .. desired_orders },
-      surface = player.surface,
-      target = {
-         player.position.x - 2,
-         player.position.y - 9
-      },
-      scale = 3,
-      color = { 1, 1, 1 },
-      time_to_live = config.update_interval,
-   }
+      local order_error_color = order_error > 0 and { 0.7, 1, 0.7 } or { 1, 0.7, 0.7 }
+      rendering.draw_text {
+         text = { "", "order_error: " .. order_error },
+         surface = player.surface,
+         target = {
+            player.position.x - 2,
+            player.position.y - 10
+         },
+         scale = 3,
+         color = order_error_color,
+         time_to_live = config.update_interval,
+      }
 
+      rendering.draw_text {
+         text = { "", "allowed_error: " .. allowed_error },
+         surface = player.surface,
+         target = {
+            player.position.x - 2,
+            player.position.y - 11
+         },
+         scale = 3,
+         color = { 1, 1, 1 },
+         time_to_live = config.update_interval,
+      }
 
-   local order_error_color = order_error > 0 and { 0.7, 1, 0.7 } or { 1, 0.7, 0.7 }
-   rendering.draw_text {
-      text = { "", "order_error: " .. order_error },
-      surface = player.surface,
-      target = {
-         player.position.x - 2,
-         player.position.y - 10
-      },
-      scale = 3,
-      color = order_error_color,
-      time_to_live = config.update_interval,
-   }
+      rendering.draw_text {
+         text = { "", "max_minus_charging: " .. max_minus_charging },
+         surface = player.surface,
+         target = {
+            player.position.x - 2,
+            player.position.y - 12
+         },
+         scale = 3,
+         color = { 1, 1, 1 },
+         time_to_live = config.update_interval,
+      }
 
-   rendering.draw_text {
-      text = { "", "allowed_error: " .. allowed_error },
-      surface = player.surface,
-      target = {
-         player.position.x - 2,
-         player.position.y - 11
-      },
-      scale = 3,
-      color = { 1, 1, 1 },
-      time_to_live = config.update_interval,
-   }
+      --rendering.draw_text {
+      --   text = { "", "batterie_charge: " .. get_grid_charge(grid) },
+      --   surface = player.surface,
+      --   target = {
+      --      player.position.x - 2,
+      --      player.position.y - 13
+      --   },
+      --   scale = 3,
+      --   color = { 1, 1, 1 },
+      --   time_to_live = config.update_interval,
+      --}
+   end
 end
 
 
@@ -408,4 +390,8 @@ script.on_event("input-toggle-robots-build-closest-first", shortcutToggle)
 
 script.on_init(setup)
 
+commands.add_command("rbcf_clear_data", "clears the storage for the mod robots build closest first", function(command)
+   storage.player_data = {}
+   game.print("cleared data")
+end)
 --script.on_configuration_changed

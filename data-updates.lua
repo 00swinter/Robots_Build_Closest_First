@@ -14,7 +14,7 @@ for name, eq in pairs(roboports) do
       robocopy.construction_radius = i
       robocopy.localised_name = {"equipment-name." .. robocopy.name}
       robocopy.name = robocopy.name .. "-reduced-" .. i;
-      robocopy.order = "my-mod-swinter"
+      robocopy.order = "swinter-mod"
       if not eq.take_result then
          robocopy.take_result = eq.name
       end
