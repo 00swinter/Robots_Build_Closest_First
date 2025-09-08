@@ -207,8 +207,10 @@ local function newTick()
       return
    end
 
+   local player_data = storage.player_data or {}
+
    --load / init data from storage
-   local data = storage.player_data[1] or
+   local data = player_data[1] or
        {
           radius = config.min_radius,
           no_orders_streak = 0
@@ -257,7 +259,9 @@ local function newTick()
 
 
    --save data to storage
-   storage.player_data[1] = data
+   -- Ensure storage.player_data exists and save data for the correct player
+   storage.player_data = storage.player_data or {}
+   storage.player_data[player.index] = data
 
    --debug drawing
    if false then
