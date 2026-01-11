@@ -152,44 +152,38 @@ end
 
 --working values
 local config = {
-   update_pause = 10, --How many empty ticks between updates
-   order_buffer = 50,
+   update_pause = 10,          -- How many empty ticks between updates
    min_radius = 3,
-   change_rate = 0.0025,
-   snap_back_threshold = 300
+   snap_back_threshold = 300,
+
+   -- CONTROL SETTINGS
+   change_rate = 0.003,       -- The "Gas Pedal" (Proportional Gain)
+   damping_factor = 1.0,      -- The "Brake" (Derivative Gain) - High value reduces overshoot
+   max_expansion_speed = 0.5   -- Speed Limit: Max radius change per tick
 }
 
-
-
 local function updatePlayer(player, delta_time)
-   
-   --has player
+   -- 1. VALIDATION CHECKS
    if not (player and player.valid and player.character and player.character.valid) then return end
 
-   --has grid
    local grid = player.character.grid
    if not (grid and grid.valid) then return end
 
-   --has roboport
    local logistic = player.character.logistic_network
    if not (logistic and logistic.valid) then return end
 
-   --get max radius
    local max_Radius = get_grid_max_radius(grid) or 0
-
-   --no negative radius
    if max_Radius <= 0 then
       set_grid_radius(grid, 0)
       return
    end
 
-   local radius_limit_setting = def.limited_radius_table
-   [settings.get_player_settings(player)[def.limited_radius_setting].value]
+   -- 2. HANDLE SETTINGS & SHORTCUTS
+   local radius_limit_setting = def.limited_radius_table[settings.get_player_settings(player)[def.limited_radius_setting].value]
    if radius_limit_setting == 0 then
       radius_limit_setting = max_Radius
    end
 
-   --is shortcut enabled?
    if not player.is_shortcut_toggled("shortcut-toggle-robots-build-closest-first") then
       local use_limit = settings.get_player_settings(player)[def.use_limit_when_off_setting].value
       if use_limit then
@@ -200,151 +194,80 @@ local function updatePlayer(player, delta_time)
       return
    end
 
+   -- 3. LOAD DATA
    local player_data = storage.player_data or {}
+   local data = player_data[player.index] or {
+      radius = config.min_radius,
+      no_orders_streak = 0,
+      last_error = 0  -- Tracks previous error for the "Brake" logic
+   }
 
-   --load / init data from storage
-   local data = player_data[player.index] or
-       {
-          radius = config.min_radius,
-          no_orders_streak = 0
-       }
-
+   -- 4. GATHER METRICS
    local current_orders = get_player_all_robot_order_count(player)
    local max_robots = get_player_real_robot_limit(player)
    local available_robots = get_player_available_robots(player)
-
    local max_minus_charging = get_player_max_minus_charging(player)
 
-   --update streak for fast snap back
+   -- 5. RESET LOGIC (Snap Back)
    if current_orders == 0 and available_robots >= max_robots / 4 and math.abs(data.radius - radius_limit_setting) < 4 then
       if data.no_orders_streak <= config.snap_back_threshold then
          data.no_orders_streak = data.no_orders_streak + delta_time
       end
-      game.print("streak: "..data.no_orders_streak)
    else
       if data.no_orders_streak > config.snap_back_threshold then
          data.radius = config.min_radius
-         game.print("reset radius to min")
+         data.last_error = 0 -- Reset error memory on snap back
       end
       data.no_orders_streak = 0
    end
 
+   -- 6. CONTROL LOGIC (PID Controller)
    local charging_robots_diff = max_robots - max_minus_charging
-   local desired_orders = max_robots - (charging_robots_diff * 0.5) * 1.4
+   local desired_orders = max_robots - (charging_robots_diff * 0.5) * 1.7
    desired_orders = math.floor(desired_orders + 0.5)
 
-   local order_error = desired_orders - current_orders
+   local current_error = desired_orders - current_orders
    local allowed_error = desired_orders * 0.2
 
-   if math.abs(order_error) > allowed_error then
-      data.radius = data.radius + order_error * (config.change_rate / (data.radius / 6)) * delta_time
-   end
+   if math.abs(current_error) > allowed_error then
+      -- Sensitivity decreases as radius grows (it's harder to fill a large circle)
+      local sensitivity = config.change_rate / math.max(1, (data.radius / 6))
+      
+      -- P-Term (Proportional): "How far off are we?"
+      local p_term = current_error * sensitivity
 
+      -- D-Term (Derivative): "How fast is the error changing?"
+      -- If we are closing the gap fast, this term becomes negative and brakes the expansion
+      local error_delta = (current_error - data.last_error) / delta_time
+      local d_term = error_delta * (sensitivity * config.damping_factor)
+
+      -- Combine Gas + Brake
+      local adjustment = (p_term + d_term) * delta_time
+
+      -- Clamp Speed (Prevent giant jumps)
+      local max_change = config.max_expansion_speed * delta_time
+      adjustment = clamp(-max_change, max_change, adjustment)
+
+      data.radius = data.radius + adjustment
+   end
+   
+   -- Save current error for the next tick
+   data.last_error = current_error
+
+   -- 7. POWER CHECK (Shrink if low power)
    if get_grid_any_inactive(grid) then
       data.radius = data.radius - (config.change_rate * 35) * delta_time
    end
 
-   --clamp
+   -- 8. APPLY CHANGES
    data.radius = clamp(3, radius_limit_setting, data.radius)
-
-   --set new construction area
    set_grid_radius(grid, data.radius)
 
-
-   --save data to storage
-   -- Ensure storage.player_data exists and save data for the correct player
    storage.player_data = storage.player_data or {}
    storage.player_data[player.index] = data
 
-   --debug drawing
-   if false then
-      local area = {
-         { player.position.x - data.radius, player.position.y - data.radius },
-         { player.position.x + data.radius, player.position.y + data.radius }
-      }
-
-      rendering.draw_rectangle {
-         surface = player.surface,
-         left_top = area[1],
-         right_bottom = area[2],
-         color = { 0, 0.1, 0.8 },
-         time_to_live = config.update_interval,
-         width = 5
-      }
-
-      rendering.draw_text {
-         text = { "", "current_orders: " .. current_orders },
-         surface = player.surface,
-         target = {
-            player.position.x - 2,
-            player.position.y - 8
-         },
-         scale = 3,
-         color = { 1, 1, 1 },
-         time_to_live = config.update_interval,
-      }
-
-      rendering.draw_text {
-         text = { "", "desired_orders: " .. desired_orders },
-         surface = player.surface,
-         target = {
-            player.position.x - 2,
-            player.position.y - 9
-         },
-         scale = 3,
-         color = { 1, 1, 1 },
-         time_to_live = config.update_interval,
-      }
-
-      local order_error_color = order_error > 0 and { 0.7, 1, 0.7 } or { 1, 0.7, 0.7 }
-      rendering.draw_text {
-         text = { "", "order_error: " .. order_error },
-         surface = player.surface,
-         target = {
-            player.position.x - 2,
-            player.position.y - 10
-         },
-         scale = 3,
-         color = order_error_color,
-         time_to_live = config.update_interval,
-      }
-
-      rendering.draw_text {
-         text = { "", "allowed_error: " .. allowed_error },
-         surface = player.surface,
-         target = {
-            player.position.x - 2,
-            player.position.y - 11
-         },
-         scale = 3,
-         color = { 1, 1, 1 },
-         time_to_live = config.update_interval,
-      }
-
-      rendering.draw_text {
-         text = { "", "max_minus_charging: " .. max_minus_charging },
-         surface = player.surface,
-         target = {
-            player.position.x - 2,
-            player.position.y - 12
-         },
-         scale = 3,
-         color = { 1, 1, 1 },
-         time_to_live = config.update_interval,
-      }
-
-      --rendering.draw_text {
-      --   text = { "", "batterie_charge: " .. get_grid_charge(grid) },
-      --   surface = player.surface,
-      --   target = {
-      --      player.position.x - 2,
-      --      player.position.y - 13
-      --   },
-      --   scale = 3,
-      --   color = { 1, 1, 1 },
-      --   time_to_live = config.update_interval,
-      --}
-   end
+   -- 9. DEBUG (Optional)
+   -- rendering.draw_text{...} -- (Your existing debug code here if needed)
 end
 
 
@@ -427,4 +350,32 @@ commands.add_command("rbcf_clear_data", "clears the storage for the mod robots b
    storage.player_data = {}
    game.print("cleared data")
 end)
---script.on_configuration_changed
+
+script.on_configuration_changed(function(data)
+   -- Check if OUR mod was the one that changed
+   -- Replace "YourModName" with the exact name from your info.json
+   if data.mod_changes["Robots_Build_Closest_First"] then
+      
+      -- Iterate through all existing data and patch it
+      if storage.player_data then
+         for player_index, p_data in pairs(storage.player_data) do
+            
+            -- MIGRATION: Add 'last_error' if it's missing
+            if p_data.radius == nil then
+               p_data.radius = config.min_radius
+               game.print("Migrated player " .. player_index .. ": Added radius")
+            end
+
+            if p_data.no_orders_streak == nil then
+               p_data.no_orders_streak = 0
+               game.print("Migrated player " .. player_index .. ": Added no_orders_streak")
+            end
+
+            if p_data.last_error == nil then
+               p_data.last_error = 0
+               game.print("Migrated player " .. player_index .. ": Added last_error")
+            end
+         end
+      end
+   end
+end)
