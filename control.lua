@@ -148,31 +148,22 @@ local function clamp(min, max, value)
    return math.max(min, math.min(value, max))
 end
 
+
+
 --working values
 local config = {
-   update_interval = 10,
+   update_pause = 10, --How many empty ticks between updates
    order_buffer = 50,
    min_radius = 3,
    change_rate = 0.0025,
    snap_back_threshold = 300
 }
 
-local function newTick()
-   if game.tick % config.update_interval ~= 0 then return end
 
-   local connected_players = game.connected_players
-   if #connected_players == 0 then return end
 
-   for _, pla in pairs(connected_players) do
-      game.print(pla.name)
-   end
-
-   --calculate tick
-   local update_rate = 10 --#connected_players
-   local tick = #connected_players + 1
-
+local function updatePlayer(player, delta_time)
+   
    --has player
-   local player = game.players[1]
    if not (player and player.valid and player.character and player.character.valid) then return end
 
    --has grid
@@ -185,6 +176,8 @@ local function newTick()
 
    --get max radius
    local max_Radius = get_grid_max_radius(grid) or 0
+
+   --no negative radius
    if max_Radius <= 0 then
       set_grid_radius(grid, 0)
       return
@@ -210,7 +203,7 @@ local function newTick()
    local player_data = storage.player_data or {}
 
    --load / init data from storage
-   local data = player_data[1] or
+   local data = player_data[player.index] or
        {
           radius = config.min_radius,
           no_orders_streak = 0
@@ -225,7 +218,7 @@ local function newTick()
    --update streak for fast snap back
    if current_orders == 0 and available_robots >= max_robots / 4 and math.abs(data.radius - radius_limit_setting) < 4 then
       if data.no_orders_streak <= config.snap_back_threshold then
-         data.no_orders_streak = data.no_orders_streak + update_rate
+         data.no_orders_streak = data.no_orders_streak + delta_time
       end
       game.print("streak: "..data.no_orders_streak)
    else
@@ -244,11 +237,11 @@ local function newTick()
    local allowed_error = desired_orders * 0.2
 
    if math.abs(order_error) > allowed_error then
-      data.radius = data.radius + order_error * (config.change_rate / (data.radius / 6)) * update_rate
+      data.radius = data.radius + order_error * (config.change_rate / (data.radius / 6)) * delta_time
    end
 
    if get_grid_any_inactive(grid) then
-      data.radius = data.radius - (config.change_rate * 35) * update_rate
+      data.radius = data.radius - (config.change_rate * 35) * delta_time
    end
 
    --clamp
@@ -355,6 +348,42 @@ local function newTick()
 end
 
 
+local function tick()
+
+   -- 1. Get List and Count
+   local players = game.connected_players
+   local player_count = #players
+   if player_count == 0 then return end
+
+   local cycle_length = player_count + config.update_pause
+
+   -- get current step in cycle 0-(cycle_length-1)
+   local step = game.tick % cycle_length
+
+   -- check if update or pause phase
+   if step < player_count then
+      -- UPDATE PHASE
+      local player = players[step + 1]
+
+      if player and player.valid then
+         -- DELTATIME: 
+         -- Time between updates for this player is exactly the cycle length.
+         local deltaTime = cycle_length
+         
+         updatePlayer(player, deltaTime)
+
+         -- Debug:
+         --game.print(game.tick .. ": Update " .. player.name .. " (DT: " .. deltaTime .. ")")
+      end
+
+   else
+      -- PAUSE PHASE
+      -- Debug:
+      --game.print(game.tick .. ": Pause")
+   end
+end
+
+
 
 
 
@@ -386,7 +415,7 @@ end
 
 
 
-script.on_event({ defines.events.on_tick }, newTick)
+script.on_event({ defines.events.on_tick }, tick)
 
 script.on_event(defines.events.on_lua_shortcut, shortcutToggle)
 
