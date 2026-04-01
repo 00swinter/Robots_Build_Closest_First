@@ -4,7 +4,7 @@ local def = require("defines")
 
 
 local function get_eq_max_radius(eq)
-   return eq.prototype.take_result.place_as_equipment_result.logistic_parameters.construction_radius
+   return math.floor(eq.prototype.take_result.place_as_equipment_result.logistic_parameters.construction_radius)
 end
 
 local function get_eq_max_area(eq)
@@ -309,7 +309,6 @@ end
 
 local function shortcutToggle(e)
    if e.prototype_name == SHORTCUT or e.input_name == "input-toggle-robots-build-closest-first" then
-      game.print("toggle!!!!")
       toggle_shortcut(e)
    end
 end
@@ -335,7 +334,7 @@ script.on_init(setup)
 
 commands.add_command("rbcf_clear_data", "clears the storage for the mod robots build closest first", function(command)
    storage.player_data = {}
-   game.print("cleared data")
+   game.print("(Robots_Build_Closest_First MOD) Data cleared")
 end)
 
 script.on_configuration_changed(function(data)
