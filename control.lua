@@ -157,13 +157,13 @@ local config = {
    snap_back_threshold = 300,
 
    -- CONTROL SETTINGS
-   change_rate = 0.003,       -- The "Gas Pedal" (Proportional Gain)
-   damping_factor = 1.0,      -- The "Brake" (Derivative Gain) - High value reduces overshoot
-   max_expansion_speed = 0.5   -- Speed Limit: Max radius change per tick
+   change_rate = 0.003,  --how much it grows
+   damping_factor = 1.0,      -- how much it slows down
+   max_expansion_speed = 0.5   -- speedlimit
 }
 
 local function updatePlayer(player, delta_time)
-   -- 1. VALIDATION CHECKS
+   -- validation checks
    if not (player and player.valid and player.character and player.character.valid) then return end
 
    local grid = player.character.grid
@@ -178,7 +178,7 @@ local function updatePlayer(player, delta_time)
       return
    end
 
-   -- 2. HANDLE SETTINGS & SHORTCUTS
+   -- settings and shortcut
    local radius_limit_setting = def.limited_radius_table[settings.get_player_settings(player)[def.limited_radius_setting].value]
    if radius_limit_setting == 0 then
       radius_limit_setting = max_Radius
@@ -194,7 +194,7 @@ local function updatePlayer(player, delta_time)
       return
    end
 
-   -- 3. LOAD DATA
+   -- load data
    local player_data = storage.player_data or {}
    local data = player_data[player.index] or {
       radius = config.min_radius,
@@ -202,13 +202,13 @@ local function updatePlayer(player, delta_time)
       last_error = 0  -- Tracks previous error for the "Brake" logic
    }
 
-   -- 4. GATHER METRICS
+   -- robot order metrics
    local current_orders = get_player_all_robot_order_count(player)
    local max_robots = get_player_real_robot_limit(player)
    local available_robots = get_player_available_robots(player)
    local max_minus_charging = get_player_max_minus_charging(player)
 
-   -- 5. RESET LOGIC (Snap Back)
+   -- snap back logic
    if current_orders == 0 and available_robots >= max_robots / 4 and math.abs(data.radius - radius_limit_setting) < 4 then
       if data.no_orders_streak <= config.snap_back_threshold then
          data.no_orders_streak = data.no_orders_streak + delta_time
@@ -216,12 +216,12 @@ local function updatePlayer(player, delta_time)
    else
       if data.no_orders_streak > config.snap_back_threshold then
          data.radius = config.min_radius
-         data.last_error = 0 -- Reset error memory on snap back
+         data.last_error = 0 -- reset error on snap back
       end
       data.no_orders_streak = 0
    end
 
-   -- 6. CONTROL LOGIC (PID Controller)
+   -- PID controller logic for radius adjustment
    local charging_robots_diff = max_robots - max_minus_charging
    local desired_orders = max_robots - (charging_robots_diff * 0.5) * 1.7
    desired_orders = math.floor(desired_orders + 0.5)
@@ -230,57 +230,49 @@ local function updatePlayer(player, delta_time)
    local allowed_error = desired_orders * 0.2
 
    if math.abs(current_error) > allowed_error then
-      -- Sensitivity decreases as radius grows (it's harder to fill a large circle)
+      
       local sensitivity = config.change_rate / math.max(1, (data.radius / 6))
       
-      -- P-Term (Proportional): "How far off are we?"
       local p_term = current_error * sensitivity
 
-      -- D-Term (Derivative): "How fast is the error changing?"
-      -- If we are closing the gap fast, this term becomes negative and brakes the expansion
       local error_delta = (current_error - data.last_error) / delta_time
       local d_term = error_delta * (sensitivity * config.damping_factor)
 
-      -- Combine Gas + Brake
       local adjustment = (p_term + d_term) * delta_time
 
-      -- Clamp Speed (Prevent giant jumps)
       local max_change = config.max_expansion_speed * delta_time
       adjustment = clamp(-max_change, max_change, adjustment)
 
       data.radius = data.radius + adjustment
    end
    
-   -- Save current error for the next tick
+   -- save
    data.last_error = current_error
 
-   -- 7. POWER CHECK (Shrink if low power)
    if get_grid_any_inactive(grid) then
       data.radius = data.radius - (config.change_rate * 35) * delta_time
    end
 
-   -- 8. APPLY CHANGES
+   -- apply changes
    data.radius = clamp(3, radius_limit_setting, data.radius)
    set_grid_radius(grid, data.radius)
 
    storage.player_data = storage.player_data or {}
    storage.player_data[player.index] = data
 
-   -- 9. DEBUG (Optional)
-   -- rendering.draw_text{...} -- (Your existing debug code here if needed)
 end
 
 
 local function tick()
 
-   -- 1. Get List and Count
+   -- get list of players
    local players = game.connected_players
    local player_count = #players
    if player_count == 0 then return end
 
    local cycle_length = player_count + config.update_pause
 
-   -- get current step in cycle 0-(cycle_length-1)
+   -- get current step in cycle
    local step = game.tick % cycle_length
 
    -- check if update or pause phase
@@ -289,20 +281,15 @@ local function tick()
       local player = players[step + 1]
 
       if player and player.valid then
-         -- DELTATIME: 
-         -- Time between updates for this player is exactly the cycle length.
          local deltaTime = cycle_length
          
          updatePlayer(player, deltaTime)
 
-         -- Debug:
-         --game.print(game.tick .. ": Update " .. player.name .. " (DT: " .. deltaTime .. ")")
       end
 
    else
       -- PAUSE PHASE
-      -- Debug:
-      --game.print(game.tick .. ": Pause")
+      -- do nothing
    end
 end
 
@@ -321,7 +308,7 @@ end
 
 
 local function shortcutToggle(e)
-   if e.prototype_name == SHORTCUT then
+   if e.prototype_name == SHORTCUT or e.input_name == "input-toggle-robots-build-closest-first" then
       game.print("toggle!!!!")
       toggle_shortcut(e)
    end
@@ -352,28 +339,25 @@ commands.add_command("rbcf_clear_data", "clears the storage for the mod robots b
 end)
 
 script.on_configuration_changed(function(data)
-   -- Check if OUR mod was the one that changed
-   -- Replace "YourModName" with the exact name from your info.json
+
    if data.mod_changes["Robots_Build_Closest_First"] then
       
-      -- Iterate through all existing data and patch it
       if storage.player_data then
          for player_index, p_data in pairs(storage.player_data) do
             
-            -- MIGRATION: Add 'last_error' if it's missing
             if p_data.radius == nil then
                p_data.radius = config.min_radius
-               game.print("Migrated player " .. player_index .. ": Added radius")
+               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_index .. ": Added radius")
             end
 
             if p_data.no_orders_streak == nil then
                p_data.no_orders_streak = 0
-               game.print("Migrated player " .. player_index .. ": Added no_orders_streak")
+               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_index .. ": Added no_orders_streak")
             end
 
             if p_data.last_error == nil then
                p_data.last_error = 0
-               game.print("Migrated player " .. player_index .. ": Added last_error")
+               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_index .. ": Added last_error")
             end
          end
       end

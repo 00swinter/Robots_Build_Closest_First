@@ -1,11 +1,11 @@
 {
     "name": "Robots_Build_Closest_First",
-    "version": "0.0.2",
+    "version": "1.0.0",
     "title": "Robots Build Closest First",
     "author": "00swinter",
     "contact": "Discord: 00swinter",
     "homepage": "https://github.com/00swinter/Robots_Build_Closest_First",
     "factorio_version": "2.0",
     "dependencies": ["base >= 2.0" ],
-    "description": "Personal construction robots will now prioritize building and deconstructing entities that are closest to the player  -  this makes a player twice as fast at building and deconstructing with robots with the exact same equipment setup!"
+    "description": "Personal construction robots now prioritize building and deconstructing entities closest to the player. This change makes a player twice as fast at building and deconstructing with the exact same equipment setup. \n\n This mod is a complete rework of similar existing mods and offers a massive performance increase. \n\n A shortcut is available to toggle the mod, and the maximum construction area can be limited in the settings. \n\n Should work with other mods adding new personal roboports."
 }
