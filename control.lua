@@ -1,6 +1,12 @@
 local def = require("defines")
 
 
+local function errorLog(errorText)
+   game.print("(Robots_Build_Closest_First MOD) " .. errorText)
+   game.print("Please report this on the mod portal with steps to reproduce it, thank you!")
+   game.print("If you use other mods that add new types of roboport equipment, pls add a links to the exact mods you are using.")
+
+end
 
 
 local function get_eq_max_radius(eq)
@@ -111,8 +117,7 @@ local function set_eq_radius(grid, eq, desired_radius)
    if new_eq then
       new_eq.energy = eq_energy
    else
-      game.print(
-         "ERROR in mod Robots-Build-Closest-First: 'could not swap Roboport'... pls report it on the mod portal.")
+      errorLog('could not swap Roboport')
    end
 end
 
@@ -150,6 +155,94 @@ end
 
 
 
+
+
+local function addPositions(pos1, pos2)
+    local x1 = pos1.x or pos1[1]
+    local y1 = pos1.y or pos1[2]
+    local x2 = pos2.x or pos2[1]
+    local y2 = pos2.y or pos2[2]
+
+    return { x = x1 + x2, y = y1 + y2 }
+end
+
+
+local function drawDebugVisuals(player, delta_time, radius, max_robots, avg_available, current_orders)
+   local left_top = { player.position.x - radius, player.position.y - radius }
+   local right_bottom = { player.position.x + radius, player.position.y + radius }
+
+   local text_offset = -8
+
+   local radiusTextPos = addPositions(player.position, {0,text_offset})
+   text_offset = text_offset - 1
+
+   local maxRobotsTextPos = addPositions(player.position, {0, text_offset})
+   text_offset = text_offset - 1
+
+   local avgAvailableTextPos = addPositions(player.position, {0, text_offset})
+   text_offset = text_offset - 1
+
+   local avgAvailableNumberTextPos = addPositions(player.position, {0, text_offset})
+   text_offset = text_offset - 1
+
+   local currentOrdersTextPos = addPositions(player.position, {0, text_offset})
+
+
+
+   rendering.draw_rectangle {
+      color = {1, 1, 1, 1},
+      width = 2,
+      filled = false,
+      left_top = left_top,
+      right_bottom = right_bottom,
+      surface = player.surface,
+      time_to_live = delta_time
+   }
+   rendering.draw_text{
+      text = string.format("Radius: %.1f", radius),
+      scale = 2,
+      surface = player.surface,
+      target = radiusTextPos,
+      color = {1, 1, 1},
+      time_to_live = delta_time
+   }
+   rendering.draw_text{
+      text = string.format("MaxRobots: %d", max_robots),
+      scale = 2,
+      surface = player.surface,
+      target = maxRobotsTextPos,
+      color = {1, 1, 1},
+      time_to_live = delta_time
+   }
+   rendering.draw_text{
+        text = string.format("Avg Available: %d%%", avg_available / max_robots * 100),
+        scale = 2,
+        surface = player.surface,
+        target = avgAvailableTextPos,
+        color = {1, 1, 1},
+        time_to_live = delta_time
+   }
+   rendering.draw_text{
+        text = string.format("Avg Available: %d", avg_available),
+        scale = 2,
+        surface = player.surface,
+        target = avgAvailableNumberTextPos,
+        color = {1, 1, 1},
+        time_to_live = delta_time
+   }
+   rendering.draw_text{
+        text = string.format("Current Orders: %d", current_orders),
+        scale = 2,
+        surface = player.surface,
+        target = currentOrdersTextPos,
+        color = {1, 1, 1},
+        time_to_live = delta_time
+    }
+   
+   
+end
+
+
 --working values
 local config = {
    update_pause = 10,          -- How many empty ticks between updates
@@ -159,7 +252,9 @@ local config = {
    -- CONTROL SETTINGS
    change_rate = 0.003,  --how much it grows
    damping_factor = 1.0,      -- how much it slows down
-   max_expansion_speed = 0.5   -- speedlimit
+   max_expansion_speed = 0.5,   -- speedlimit
+
+   debug = false
 }
 
 local function updatePlayer(player, delta_time)
@@ -199,7 +294,8 @@ local function updatePlayer(player, delta_time)
    local data = player_data[player.index] or {
       radius = config.min_radius,
       no_orders_streak = 0,
-      last_error = 0  -- Tracks previous error for the "Brake" logic
+      last_error = 0,  -- Tracks previous error for the "Brake" logic
+      avg_available_robots = 0 -- for debugging
    }
 
    -- robot order metrics
@@ -207,6 +303,16 @@ local function updatePlayer(player, delta_time)
    local max_robots = get_player_real_robot_limit(player)
    local available_robots = get_player_available_robots(player)
    local max_minus_charging = get_player_max_minus_charging(player)
+
+   local available_robots_inventory = player.character.logistic_network.available_construction_robots
+   -- calculate moving average
+   if data.avg_available_robots == 0 then
+      data.avg_available_robots = available_robots_inventory
+   else
+      local smoothing = math.min(1, 0.003 * delta_time)
+      data.avg_available_robots = data.avg_available_robots + (available_robots_inventory - data.avg_available_robots) * smoothing
+      --game.print("Avg Available Robots: " .. math.floor(player.character.logistic_network.available_construction_robots))
+   end
 
    -- snap back logic
    if current_orders == 0 and available_robots >= max_robots / 4 and math.abs(data.radius - radius_limit_setting) < 4 then
@@ -260,6 +366,11 @@ local function updatePlayer(player, delta_time)
    storage.player_data = storage.player_data or {}
    storage.player_data[player.index] = data
 
+   if config.debug then
+      drawDebugVisuals(player, delta_time, data.radius, max_robots, data.avg_available_robots, current_orders)
+   end
+   
+
 end
 
 
@@ -284,7 +395,7 @@ local function tick()
          local deltaTime = cycle_length
          
          updatePlayer(player, deltaTime)
-
+         
       end
 
    else
@@ -344,19 +455,26 @@ script.on_configuration_changed(function(data)
       if storage.player_data then
          for player_index, p_data in pairs(storage.player_data) do
             
+            local player_name = game.players[player_index] and game.players[player_index].name or "unknownPlayerName"
+
             if p_data.radius == nil then
                p_data.radius = config.min_radius
-               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_index .. ": Added radius")
+               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_name .. ": Added radius")
             end
 
             if p_data.no_orders_streak == nil then
                p_data.no_orders_streak = 0
-               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_index .. ": Added no_orders_streak")
+               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_name .. ": Added no_orders_streak")
             end
 
             if p_data.last_error == nil then
                p_data.last_error = 0
-               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_index .. ": Added last_error")
+               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_name .. ": Added last_error")
+            end
+
+            if p_data.avg_available_robots == nil then
+               p_data.avg_available_robots = 0
+               game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_name .. ": Added avg_available_robots")
             end
          end
       end

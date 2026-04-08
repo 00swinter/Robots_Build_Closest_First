@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.4
+Date: 08.04.2026
+  Changes:
+    - reimplemented debugging visuals.
+    - roboport variants are now created in the data-final-fixes stage.
+      (compatibility with mods that add personal roboports in data or data-updates)
+---------------------------------------------------------------------------------------------------
 Version: 1.0.3
 Date: 01.04.2026
   Changes:
