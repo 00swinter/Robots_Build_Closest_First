@@ -112,8 +112,11 @@ local function set_eq_radius(grid, eq, desired_radius)
 
    local eq_pos = eq.position
    local eq_energy = eq.energy
+   local eq_quality = eq.quality.name
+
    grid.take { position = eq_pos }
-   local new_eq = grid.put { name = variant_name, position = eq_pos }
+   local new_eq = grid.put { name = variant_name, position = eq_pos, quality = eq_quality}
+
    if new_eq then
       new_eq.energy = eq_energy
    else

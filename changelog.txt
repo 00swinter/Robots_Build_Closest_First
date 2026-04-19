@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.5
+Date: 19.04.2026
+  Changes:
+    - fixed a bug that caused the mod to completly ignore equipment QUALITY and reverted to normal.
+      now the mod correctly swaps equipment, keeping the original quality consistent.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.4
 Date: 08.04.2026
   Changes:
