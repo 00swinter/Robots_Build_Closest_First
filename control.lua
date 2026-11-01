@@ -5,7 +5,6 @@ local function errorLog(errorText)
    game.print("(Robots_Build_Closest_First MOD) " .. errorText)
    game.print("Please report this on the mod portal with steps to reproduce it, thank you!")
    game.print("If you use other mods that add new types of roboport equipment, pls add a links to the exact mods you are using.")
-
 end
 
 
@@ -249,11 +248,11 @@ end
 --working values
 local config = {
    update_pause = 10,          -- How many empty ticks between updates
-   min_radius = 3,
+   --min_radius = def.minimum_radius_table[settings.get_player_settings(player)[def.minimum_radius_setting].value],
    snap_back_threshold = 300,
 
    -- CONTROL SETTINGS
-   change_rate = 0.003,  --how much it grows
+   change_rate = 0.009,  --how much it grows
    damping_factor = 1.0,      -- how much it slows down
    max_expansion_speed = 0.5,   -- speedlimit
 
@@ -281,6 +280,9 @@ local function updatePlayer(player, delta_time)
    if radius_limit_setting == 0 then
       radius_limit_setting = max_Radius
    end
+   local radius_minimum_setting = def.minimum_radius_table[settings.get_player_settings(player)[def.minimum_radius_setting].value]
+
+
 
    if not player.is_shortcut_toggled("shortcut-toggle-robots-build-closest-first") then
       local use_limit = settings.get_player_settings(player)[def.use_limit_when_off_setting].value
@@ -295,7 +297,8 @@ local function updatePlayer(player, delta_time)
    -- load data
    local player_data = storage.player_data or {}
    local data = player_data[player.index] or {
-      radius = config.min_radius,
+      radius = radius_minimum_setting,
+      --radius = def.minimum_radius_table[settings.get_player_settings(player)[def.minimum_radius_setting].value],
       no_orders_streak = 0,
       last_error = 0,  -- Tracks previous error for the "Brake" logic
       avg_available_robots = 0 -- for debugging
@@ -324,7 +327,7 @@ local function updatePlayer(player, delta_time)
       end
    else
       if data.no_orders_streak > config.snap_back_threshold then
-         data.radius = config.min_radius
+         data.radius = radius_minimum_setting
          data.last_error = 0 -- reset error on snap back
       end
       data.no_orders_streak = 0
@@ -363,7 +366,10 @@ local function updatePlayer(player, delta_time)
    end
 
    -- apply changes
-   data.radius = clamp(3, radius_limit_setting, data.radius)
+   local clamp_min = radius_minimum_setting
+   local clamp_max = math.max(radius_limit_setting, clamp_min)
+
+   data.radius = clamp(clamp_min, clamp_max, data.radius)
    set_grid_radius(grid, data.radius)
 
    storage.player_data = storage.player_data or {}
@@ -461,7 +467,7 @@ script.on_configuration_changed(function(data)
             local player_name = game.players[player_index] and game.players[player_index].name or "unknownPlayerName"
 
             if p_data.radius == nil then
-               p_data.radius = config.min_radius
+               p_data.radius = def.minimum_radius_table[settings.get_player_settings(player_name)[def.minimum_radius_setting].value]
                game.print("(Robots_Build_Closest_First MOD) Migrated player " .. player_name .. ": Added radius")
             end
 
@@ -482,4 +488,22 @@ script.on_configuration_changed(function(data)
          end
       end
    end
+end)
+
+
+local shortcut_name = "shortcut-toggle-robots-build-closest-first"
+
+script.on_event(defines.events.on_player_created, function(event)
+    local player = game.get_player(event.player_index)
+    if player then
+        player.set_shortcut_toggled(shortcut_name, true)
+    end
+end)
+
+script.on_configuration_changed(function(event)
+    if event.mod_changes and event.mod_changes["Robots_Build_Closest_First"] then
+        for _, player in pairs(game.players) do
+            player.set_shortcut_toggled(shortcut_name, true)
+        end
+    end
 end)

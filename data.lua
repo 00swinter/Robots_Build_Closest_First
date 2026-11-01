@@ -10,6 +10,7 @@ data:extend{
         type = "shortcut",
         name = "shortcut-toggle-robots-build-closest-first",
         localised_name = {"shortcut.shortcut-toggle-robots-build-closest-first"},
+        order = "c[toggles]-c[robots_closest_first]",
         action = "lua",
         associated_control_input = "input-toggle-robots-build-closest-first",
         icon = "__Robots_Build_Closest_First__/graphics/shortcut_icon_56.png",
