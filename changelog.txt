@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.8
+Date: 01.11.2026
+  Changes:
+    - added a map setting to prepare for uninstallation. While it is on, custom roboports are restored to the original equipment so the mod can be removed without deleting them.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.7
 Date: 30.10.2026
   Changes:

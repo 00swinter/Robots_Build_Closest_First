@@ -17,6 +17,7 @@ return {
       ["120x120"] = 60,
       ["limit off"] = 0
    },
+   prepare_for_uninstallation_setting = "RBCF_prepare_for_uninstallation",
    minimum_radius_setting = "RBCF_minimum_radius_setting",
    minimum_radius_table = {
       ["6x6"] = 3,

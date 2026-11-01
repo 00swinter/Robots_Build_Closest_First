@@ -51,4 +51,11 @@ data:extend({
         default_value = true,
         order = "c"
     },
+    {
+        type = "bool-setting",
+        name = def.prepare_for_uninstallation_setting,
+        setting_type = "runtime-global",
+        default_value = false,
+        order = "z"
+    },
 })

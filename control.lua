@@ -383,7 +383,68 @@ local function updatePlayer(player, delta_time)
 end
 
 
+local prepare_done = false
+
+local function restore_grid(grid)
+   if not (grid and grid.valid) then return 0 end
+   local pending, restored = {}, 0
+   for _, eq in pairs(grid.equipment) do
+      if eq.type == "roboport-equipment" and string.find(eq.name, "%-reduced%-%d+$") then
+         pending[#pending + 1] = {
+            pos = { x = eq.position.x, y = eq.position.y }, energy = eq.energy, quality = eq.quality.name, name = eq.name,
+            original = eq.prototype.take_result.place_as_equipment_result.name
+         }
+      end
+   end
+   for _, eq in pairs(pending) do
+      grid.take { position = eq.pos }
+      local put = grid.put { name = eq.original, position = eq.pos, quality = eq.quality }
+      if not put then put = grid.put { name = eq.name, position = eq.pos, quality = eq.quality } end
+      if put then put.energy = eq.energy end
+      if put and put.name == eq.original then restored = restored + 1 end
+   end
+   return restored
+end
+
+local function restore_inventory(inventory, restored)
+   if not inventory then return restored end
+   for i = 1, #inventory do
+      local stack = inventory[i]
+      if stack.valid_for_read then restored = restored + restore_grid(stack.grid) end
+   end
+   return restored
+end
+
+local function restore_all()
+   local restored = 0
+   for _, player in pairs(game.players) do
+      if player.cursor_stack and player.cursor_stack.valid_for_read then restored = restored + restore_grid(player.cursor_stack.grid) end
+      for _, id in pairs(defines.inventory) do restored = restore_inventory(player.get_inventory(id), restored) end
+   end
+   for _, surface in pairs(game.surfaces) do
+      for _, entity in pairs(surface.find_entities()) do
+         restored = restored + restore_grid(entity.grid)
+         if entity.type == "item-entity" and entity.stack and entity.stack.valid_for_read then
+            restored = restored + restore_grid(entity.stack.grid)
+         end
+         for _, id in pairs(defines.inventory) do restored = restore_inventory(entity.get_inventory(id), restored) end
+      end
+   end
+   return restored
+end
+
 local function tick()
+   if settings.global[def.prepare_for_uninstallation_setting].value then
+      if not prepare_done then
+         local restored = restore_all()
+         prepare_done = true
+         game.print("Robots Build Closest First: Preparation successful. Restored " .. restored .. " personal roboport(s). Save the game, then uninstall.", {1, 0.85, 0.2})
+      elseif game.tick % 300 == 0 then
+         game.print("Robots Build Closest First: Prepare for uninstallation is ON. The mod will not work as intended. Turn this setting off, or uninstall the mod now.", {1, 0.3, 0.2})
+      end
+      return
+   end
+   prepare_done = false
 
    -- get list of players
    local players = game.connected_players
