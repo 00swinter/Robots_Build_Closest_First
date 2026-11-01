@@ -108,6 +108,9 @@ local function set_eq_radius(grid, eq, desired_radius)
    desired_radius_rounded = math.min(desired_radius_rounded, eq_max_radius)
 
    local variant_name = get_variant_name(eq, desired_radius_rounded)
+   if eq.name == variant_name then
+      return
+   end
 
    local eq_pos = eq.position
    local eq_energy = eq.energy
@@ -133,20 +136,32 @@ local function set_grid_radius(grid, desired_radius)
    local desired_area = desired_radius * desired_radius * 4
    local summed_area = 0
 
+   local roboports = {}
    for _, eq in next, grid.equipment do
       if eq.type == "roboport-equipment" then
-         if summed_area < desired_area then
-            local needed_area = desired_area - summed_area
-            local eq_max_area = get_eq_max_area(eq)
-            local result_area = math.ceil(math.min(needed_area, eq_max_area))
+         roboports[#roboports + 1] = eq
+      end
+   end
+   table.sort(roboports, function(a, b)
+      if a.position.y ~= b.position.y then
+         return a.position.y < b.position.y
+      end
+      return a.position.x < b.position.x
+   end)
 
-            summed_area = summed_area + result_area
+   for i = 1, #roboports do
+      local eq = roboports[i]
+      if summed_area < desired_area then
+         local needed_area = desired_area - summed_area
+         local eq_max_area = get_eq_max_area(eq)
+         local result_area = math.ceil(math.min(needed_area, eq_max_area))
 
-            local result_radius = math.sqrt(result_area) / 2
-            set_eq_radius(grid, eq, result_radius)
-         else
-            set_eq_radius(grid, eq, 0)
-         end
+         summed_area = summed_area + result_area
+
+         local result_radius = math.sqrt(result_area) / 2
+         set_eq_radius(grid, eq, result_radius)
+      else
+         set_eq_radius(grid, eq, 0)
       end
    end
 end
@@ -247,14 +262,20 @@ end
 
 --working values
 local config = {
-   update_pause = 10,          -- How many empty ticks between updates
-   --min_radius = def.minimum_radius_table[settings.get_player_settings(player)[def.minimum_radius_setting].value],
-   snap_back_threshold = 300,
+   update_pause = 10,            -- How many empty ticks between updates
 
    -- CONTROL SETTINGS
-   change_rate = 0.009,  --how much it grows
-   damping_factor = 1.0,      -- how much it slows down
-   max_expansion_speed = 0.5,   -- speedlimit
+   grow_ratio = 0.85,            -- Grow when queued orders are below 85% of active non-charging robots
+   shrink_ratio = 0.35,          -- Shrink when queued orders exceed capacity by more than 35% (min +3)
+
+   base_grow_speed = 0.045,      -- Gentle grow speed when nearly all robots are busy (tiles/tick)
+   max_grow_speed = 0.24,        -- Brisk grow speed when no/few orders are in range (tiles/tick)
+
+   base_shrink_speed = 0.05,     -- Gentle shrink speed near the stay band (tiles/tick)
+   max_shrink_speed = 0.22,      -- Brisk shrink speed when heavily overloaded (tiles/tick)
+
+   move_floor_decay = 1.5,       -- How fast the anti-oscillation floor drops per tile of player movement
+   move_speed_factor = 0.65,     -- Extra grow/shrink responsiveness per tile of player movement
 
    debug = false
 }
@@ -282,7 +303,8 @@ local function updatePlayer(player, delta_time)
    end
    local radius_minimum_setting = def.minimum_radius_table[settings.get_player_settings(player)[def.minimum_radius_setting].value]
 
-
+   local clamp_min = radius_minimum_setting
+   local clamp_max = math.max(radius_limit_setting, clamp_min)
 
    if not player.is_shortcut_toggled("shortcut-toggle-robots-build-closest-first") then
       local use_limit = settings.get_player_settings(player)[def.use_limit_when_off_setting].value
@@ -297,10 +319,12 @@ local function updatePlayer(player, delta_time)
    -- load data
    local player_data = storage.player_data or {}
    local data = player_data[player.index] or {
-      radius = radius_minimum_setting,
-      --radius = def.minimum_radius_table[settings.get_player_settings(player)[def.minimum_radius_setting].value],
+      radius = clamp_min,
+      applied_radius = clamp_min,
+      floor_radius = clamp_min,
+      last_orders = 0,
       no_orders_streak = 0,
-      last_error = 0,  -- Tracks previous error for the "Brake" logic
+      last_error = 0,
       avg_available_robots = 0 -- for debugging
    }
 
@@ -309,6 +333,7 @@ local function updatePlayer(player, delta_time)
    local max_robots = get_player_real_robot_limit(player)
    local available_robots = get_player_available_robots(player)
    local max_minus_charging = get_player_max_minus_charging(player)
+   local charging_robots = max_robots - max_minus_charging
 
    local available_robots_inventory = player.character.logistic_network.available_construction_robots
    -- calculate moving average
@@ -317,69 +342,168 @@ local function updatePlayer(player, delta_time)
    else
       local smoothing = math.min(1, 0.003 * delta_time)
       data.avg_available_robots = data.avg_available_robots + (available_robots_inventory - data.avg_available_robots) * smoothing
-      --game.print("Avg Available Robots: " .. math.floor(player.character.logistic_network.available_construction_robots))
    end
 
-   -- snap back logic
-   if current_orders == 0 and available_robots >= max_robots / 4 and math.abs(data.radius - radius_limit_setting) < 4 then
-      if data.no_orders_streak <= config.snap_back_threshold then
-         data.no_orders_streak = data.no_orders_streak + delta_time
+   -- track player movement so the radius responds immediately when walking/running/flying
+   local pos = player.position
+   local move_dist = 0
+   if data.last_pos then
+      local dx = pos.x - data.last_pos.x
+      local dy = pos.y - data.last_pos.y
+      move_dist = math.sqrt(dx * dx + dy * dy)
+   end
+   data.last_pos = { x = pos.x, y = pos.y }
+
+   -- Compute GROW / STAY / SHRINK thresholds:
+   -- 1. grow_limit is based on non-charging robots (charging robots cannot take orders,
+   --    so we shouldn't grow the area just because robots paused to recharge).
+   local grow_limit = math.floor(max_minus_charging * config.grow_ratio + 0.5)
+   if max_minus_charging > 0 and grow_limit < 1 then
+      grow_limit = 1
+   end
+
+   -- 2. shrink_limit is buffered above capacity and only lightly affected by charging
+   --    so robots stopping to charge don't cause false shrinking.
+   local effective_cap = math.max(max_minus_charging, math.floor(max_robots - charging_robots * 0.3 + 0.5))
+   local shrink_margin = math.max(3, math.ceil(effective_cap * config.shrink_ratio))
+   local shrink_limit = effective_cap + shrink_margin
+
+   local applied_radius = clamp(clamp_min, clamp_max, data.applied_radius or math.floor(data.radius + 0.5))
+   local last_applied_radius = data.last_applied_radius or applied_radius
+   local last_orders = data.last_orders or 0
+   local order_delta = current_orders - last_orders
+   local floor_radius = clamp(clamp_min, clamp_max, data.floor_radius or clamp_min)
+
+   -- Update anti-oscillation floor:
+   -- When stationary and consuming work, any radius that already had < grow_limit orders
+   -- still has < grow_limit orders, so never shrink back into it.
+   -- Unlock the floor when the player moves or when new work appears inside the current radius.
+   if move_dist > 0.05 then
+      floor_radius = math.max(clamp_min, floor_radius - move_dist * config.move_floor_decay)
+   end
+
+   local new_work_spike = (applied_radius <= last_applied_radius)
+      and (order_delta >= math.max(4, math.floor(effective_cap * 0.3)))
+
+   if new_work_spike or (current_orders == 0 and applied_radius >= clamp_max) then
+      floor_radius = clamp_min
+   end
+
+   if current_orders == 0 and applied_radius >= clamp_min + 6 then
+      data.from_idle_scan = true
+   elseif current_orders > 0 and current_orders <= shrink_limit then
+      data.from_idle_scan = false
+   end
+
+   -- Decide GROW, SHRINK, or STAY
+   if current_orders < grow_limit then
+      -- GROW: Not enough orders in current applied_radius to keep available robots busy.
+      -- Record that applied_radius was too small so we don't oscillate back down to it.
+      if current_orders == 0 and applied_radius >= clamp_max then
+         floor_radius = clamp_min
+      else
+         floor_radius = math.max(floor_radius, math.min(clamp_max, applied_radius + 1))
       end
+
+      local shortage = (grow_limit - current_orders) / math.max(1, grow_limit)
+      local radius_scale = 1.0
+      if current_orders > 0 then
+         -- Slow down gently at larger radii when already touching work so we don't overshoot
+         radius_scale = math.max(1.0, math.sqrt(data.radius / 8))
+      else
+         -- Scan empty space briskly even at larger radii
+         radius_scale = 1.0 + (data.radius / 60) * 0.35
+      end
+
+      local speed = (config.base_grow_speed + (config.max_grow_speed - config.base_grow_speed) * (shortage * shortage)) / radius_scale
+
+      -- One-way brake: if orders are already jumping up, damp growth so we settle smoothly
+      if order_delta > 0 then
+         local rise_ratio = order_delta / math.max(1, grow_limit)
+         local brake = math.max(0.15, 1.0 - rise_ratio * 0.85)
+         speed = speed * brake
+      end
+
+      local step = speed * delta_time + (move_dist * config.move_speed_factor * shortage)
+      local max_step = config.max_grow_speed * delta_time + (move_dist * config.move_speed_factor)
+      step = math.min(step, max_step)
+
+      data.radius = math.max(data.radius, floor_radius) + step
+
+   elseif current_orders > shrink_limit then
+      -- SHRINK: More queued orders than needed. Pull back toward floor_radius, but never below it.
+      if data.radius > floor_radius then
+         local overload = math.min(2.0, (current_orders - shrink_limit) / math.max(1, effective_cap))
+         local speed = config.base_shrink_speed + (config.max_shrink_speed - config.base_shrink_speed) * (overload / 2.0)
+
+         -- One-way brake: once shrinking starts cutting into the work (order_delta < 0),
+         -- slow down so we land inside the STAY band instead of undershooting.
+         if order_delta < 0 then
+            data.from_idle_scan = false
+            local drop_ratio = (-order_delta) / math.max(1, (current_orders - shrink_limit) + (-order_delta))
+            local brake = math.max(0.2, 1.0 - drop_ratio * 0.8)
+            speed = speed * brake
+         end
+
+         local step = speed * delta_time + (move_dist * config.move_speed_factor)
+         local max_step = config.max_shrink_speed * delta_time + (move_dist * config.move_speed_factor)
+         step = math.min(step, max_step)
+
+         -- If closing in from a wide idle scan and orders haven't started dropping yet, close the empty outer gap quickly
+         if data.from_idle_scan and order_delta >= -2 then
+            step = math.max(step, (data.radius - floor_radius) * 0.35)
+         elseif move_dist < 0.2 and (data.radius - floor_radius) <= 3.0 then
+            -- When stationary and trimming near floor_radius, step at most 1 tile at a time to lock onto the exact ring
+            step = math.min(step, 1.0)
+         end
+
+         data.radius = math.max(floor_radius, data.radius - step)
+      else
+         data.from_idle_scan = false
+         data.radius = floor_radius
+      end
+
    else
-      if data.no_orders_streak > config.snap_back_threshold then
-         data.radius = radius_minimum_setting
-         data.last_error = 0 -- reset error on snap back
-      end
-      data.no_orders_streak = 0
+      -- STAY: Orders are in the sweet spot [grow_limit, shrink_limit].
+      -- Hold the currently applied integer radius steady with zero drift.
+      data.from_idle_scan = false
+      data.radius = applied_radius
    end
 
-   -- PID controller logic for radius adjustment
-   local charging_robots_diff = max_robots - max_minus_charging
-   local desired_orders = max_robots - (charging_robots_diff * 0.5) * 1.7
-   desired_orders = math.floor(desired_orders + 0.5)
-
-   local current_error = desired_orders - current_orders
-   local allowed_error = desired_orders * 0.2
-
-   if math.abs(current_error) > allowed_error then
-      
-      local sensitivity = config.change_rate / math.max(1, (data.radius / 6))
-      
-      local p_term = current_error * sensitivity
-
-      local error_delta = (current_error - data.last_error) / delta_time
-      local d_term = error_delta * (sensitivity * config.damping_factor)
-
-      local adjustment = (p_term + d_term) * delta_time
-
-      local max_change = config.max_expansion_speed * delta_time
-      adjustment = clamp(-max_change, max_change, adjustment)
-
-      data.radius = data.radius + adjustment
-   end
-   
-   -- save
-   data.last_error = current_error
-
+   -- Low roboport energy protection (< 20% internal buffer)
    if get_grid_any_inactive(grid) then
-      data.radius = data.radius - (config.change_rate * 35) * delta_time
+      local shrink = config.max_shrink_speed * delta_time
+      data.radius = data.radius - shrink
+      floor_radius = math.min(floor_radius, math.max(clamp_min, math.floor(data.radius)))
    end
 
-   -- apply changes
-   local clamp_min = radius_minimum_setting
-   local clamp_max = math.max(radius_limit_setting, clamp_min)
-
+   -- Clamp and apply with hysteresis to prevent boundary chatter between adjacent integers
+   floor_radius = clamp(clamp_min, clamp_max, floor_radius)
    data.radius = clamp(clamp_min, clamp_max, data.radius)
-   set_grid_radius(grid, data.radius)
+
+   local new_applied = applied_radius
+   if data.radius >= applied_radius + 0.55 then
+      new_applied = math.floor(data.radius + 0.45)
+   elseif data.radius <= applied_radius - 0.55 then
+      new_applied = math.ceil(data.radius - 0.45)
+   end
+   new_applied = clamp(clamp_min, clamp_max, new_applied)
+
+   set_grid_radius(grid, new_applied)
+
+   -- Save state
+   data.last_applied_radius = applied_radius
+   data.applied_radius = new_applied
+   data.floor_radius = floor_radius
+   data.last_orders = current_orders
+   data.last_error = grow_limit - current_orders
 
    storage.player_data = storage.player_data or {}
    storage.player_data[player.index] = data
 
    if config.debug then
-      drawDebugVisuals(player, delta_time, data.radius, max_robots, data.avg_available_robots, current_orders)
+      drawDebugVisuals(player, delta_time, new_applied, max_robots, data.avg_available_robots, current_orders)
    end
-   
-
 end
 
 
@@ -439,8 +563,8 @@ local function tick()
          local restored = restore_all()
          prepare_done = true
          game.print("Robots Build Closest First: Preparation successful. Restored " .. restored .. " personal roboport(s). Save the game, then uninstall.", {1, 0.85, 0.2})
-      elseif game.tick % 300 == 0 then
-         game.print("Robots Build Closest First: Prepare for uninstallation is ON. The mod will not work as intended. Turn this setting off, or uninstall the mod now.", {1, 0.3, 0.2})
+      elseif game.tick % 500 == 0 then
+         game.print("Robots Build Closest First: Prepare for uninstallation is ON. The mod will not work as intended. Turn this setting off, or SAVE your game and uninstall the mod now.", {1, 0.3, 0.2})
       end
       return
    end
