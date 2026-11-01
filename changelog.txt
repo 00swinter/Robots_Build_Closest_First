@@ -1,9 +1,19 @@
 ---------------------------------------------------------------------------------------------------
+Version: 2.0.0
+Date: 01.11.2026
+  Changes:
+    - completely reworked the construction-area grow, shrink, and stay algorithm.
+    - added an anti-oscillation floor so the construction area locks onto the edge of work instead of bouncing back and forth between too big and too small.
+    - added player movement tracking so the construction area adapts faster while walking, running, or flying and unlocks shrinking as you move into new work.
+    - normalized grow and shrink speeds across robot counts so small and large equipment setups feel equally balanced and responsive.
+    - improved charging handling so robots pausing to recharge do not cause false area expansion or shrinking.
+    - optimized equipment swapping to skip replacing roboports when their target radius has not changed.
+    - cleaned up and simplified the control script by removing redundant state variables, unused calculations, and duplicate event handlers.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.8
 Date: 01.11.2026
   Changes:
     - added a map setting to prepare for uninstallation. While it is on, custom roboports are restored to the original equipment so the mod can be removed without deleting them.
-    - reworked the construction-area grow/shrink/stay controller to eliminate oscillation, stay responsive to moving players, and avoid unnecessary equipment swaps.
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.7
 Date: 30.10.2026
